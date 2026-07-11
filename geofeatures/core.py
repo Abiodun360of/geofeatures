@@ -1,6 +1,7 @@
 import numpy as np
 import geopandas as gpd
 from rasterstats import zonal_stats
+import rasterio
 
 
 def extract_zonal_features(raster_path, vector_gdf, stats=("mean", "std", "min", "max", "count")):
@@ -272,3 +273,89 @@ def clip_raster_by_vector(raster_path, vector_gdf, output_path):
         dst.write(out_image)
 
     return output_path
+
+
+def convert_vector_format(input_path, output_path):
+    """
+    Convert a vector file between formats (Shapefile, GeoJSON, GPKG, KML).
+    Format is inferred from the output_path file extension.
+    """
+    driver_map = {
+        ".shp": "ESRI Shapefile",
+        ".geojson": "GeoJSON",
+        ".json": "GeoJSON",
+        ".gpkg": "GPKG",
+        ".kml": "KML",
+    }
+
+    ext = "." + output_path.rsplit(".", 1)[-1].lower()
+    if ext not in driver_map:
+        raise ValueError(f"Unsupported output extension '{ext}'. Supported: {list(driver_map.keys())}")
+
+    driver = driver_map[ext]
+    gdf = gpd.read_file(input_path)
+
+    if driver == "KML" and gdf.crs and gdf.crs.to_epsg() != 4326:
+        gdf = gdf.to_crs(epsg=4326)
+
+    try:
+        gdf.to_file(output_path, driver=driver)
+    except Exception as e:
+        raise ValueError(
+            f"Failed to write '{driver}' format. Your GDAL/OGR build may not support this driver. "
+            f"Original error: {e}"
+        )
+
+    return gdf
+
+
+def load_kmz(path):
+    """
+    Load a KMZ file (zipped KML) into a GeoDataFrame.
+    """
+    import zipfile
+    import tempfile
+    import os
+
+    with zipfile.ZipFile(path, "r") as z:
+        kml_names = [n for n in z.namelist() if n.lower().endswith(".kml")]
+        if not kml_names:
+            raise ValueError(f"No .kml file found inside {path}")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            z.extract(kml_names[0], tmpdir)
+            kml_path = os.path.join(tmpdir, kml_names[0])
+            gdf = gpd.read_file(kml_path, driver="KML")
+
+    return gdf
+
+
+def load_vector(path, target_crs=None, fix_invalid=True):
+    """
+    Load a vector file into a GeoDataFrame, with optional CRS reprojection
+    and automatic geometry repair.
+    """
+    gdf = gpd.read_file(path)
+
+    if gdf.crs is None:
+        raise ValueError(f"No CRS found in {path} — cannot proceed safely without a defined CRS")
+
+    if fix_invalid:
+        invalid_mask = ~gdf.geometry.is_valid
+        if invalid_mask.any():
+            gdf.loc[invalid_mask, "geometry"] = gdf.loc[invalid_mask, "geometry"].buffer(0)
+
+    if target_crs is not None:
+        gdf = gdf.to_crs(target_crs)
+
+    return gdf
+
+
+def load_raster_as_array(path):
+    """
+    Load a raster file and return both the pixel array and its metadata.
+    """
+    with rasterio.open(path) as src:
+        data = src.read(1)
+        meta = {"crs": src.crs, "transform": src.transform}
+    return data, meta

@@ -45,3 +45,16 @@ Tested end-to-end on real Sentinel-2 L2A imagery over Ogun State, Nigeria. 18 un
 ## License
 
 MIT
+
+## Visualization
+
+- `plot_raster(raster_path, title, cmap)` — quick raster preview
+- `plot_vector(vector_gdf, column, title)` — quick vector/choropleth preview
+- `plot_zonal_result(vector_gdf, column, title)` — convenience wrapper for zonal stats results
+
+## Format conversion
+
+- `convert_vector_format(input_path, output_path)` — convert between Shapefile, GeoJSON, GPKG, KML
+- `load_kmz(path)` — load a KMZ (zipped KML) file
+- `load_vector(path, target_crs, fix_invalid)` — load with automatic geometry repair
+- `load_raster_as_array(path)` — load raster as numpy array + metadata

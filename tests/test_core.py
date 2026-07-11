@@ -6,7 +6,7 @@ import rasterio.transform
 from rasterio.transform import from_bounds
 import pytest
 
-from geofeatures.core import compute_ndvi, extract_zonal_features, compute_evi, compute_gndvi, compute_mndwi, compute_ndmi, compute_bsi, compute_nbr, compute_ndwi, compute_savi, compute_ndbi, merge_shapefiles, dissolve_by_attribute, clip_vector, clip_raster_by_vector
+from geofeatures.core import compute_ndvi, extract_zonal_features, compute_evi, compute_gndvi, compute_mndwi, compute_ndmi, compute_bsi, compute_nbr, compute_ndwi, compute_savi, compute_ndbi, merge_shapefiles, dissolve_by_attribute, clip_vector, clip_raster_by_vector, convert_vector_format, load_kmz, load_vector, load_raster_as_array
 
 
 def test_compute_ndvi_known_values():
@@ -212,3 +212,135 @@ def test_clip_raster_by_vector(tmp_path):
         clipped_data = clipped_src.read(1)
         assert clipped_data.shape[1] <= 6
         assert clipped_data.shape[1] >= 4
+
+
+def test_plot_raster_runs(tmp_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    from geofeatures.plotting import plot_raster
+
+    raster_path = tmp_path / "test.tif"
+    data = np.random.uniform(0, 1, (10, 10)).astype("float32")
+    transform = rasterio.transform.from_bounds(0, 0, 10, 10, 10, 10)
+
+    with rasterio.open(
+        raster_path, "w", driver="GTiff",
+        height=10, width=10, count=1, dtype="float32",
+        crs="EPSG:4326", transform=transform
+    ) as dst:
+        dst.write(data, 1)
+
+    ax = plot_raster(str(raster_path))
+    assert ax is not None
+
+
+def test_plot_vector_runs():
+    import matplotlib
+    matplotlib.use("Agg")
+    from geofeatures.plotting import plot_vector
+    from shapely.geometry import box
+
+    gdf = gpd.GeoDataFrame({"value": [1, 2]}, geometry=[box(0, 0, 1, 1), box(1, 1, 2, 2)], crs="EPSG:4326")
+    ax = plot_vector(gdf, column="value")
+    assert ax is not None
+
+
+def test_plot_zonal_result_runs():
+    import matplotlib
+    matplotlib.use("Agg")
+    from geofeatures.plotting import plot_zonal_result
+    from shapely.geometry import box
+
+    gdf = gpd.GeoDataFrame({"mean": [0.3, 0.5]}, geometry=[box(0, 0, 1, 1), box(1, 1, 2, 2)], crs="EPSG:4326")
+    ax = plot_zonal_result(gdf, column="mean")
+    assert ax is not None
+
+
+def test_convert_vector_format_geojson_to_gpkg(tmp_path):
+    from shapely.geometry import Point
+
+    input_path = tmp_path / "input.geojson"
+    output_path = tmp_path / "output.gpkg"
+
+    gdf = gpd.GeoDataFrame({"name": ["A", "B"]}, geometry=[Point(0, 0), Point(1, 1)], crs="EPSG:4326")
+    gdf.to_file(input_path, driver="GeoJSON")
+
+    result = convert_vector_format(str(input_path), str(output_path))
+
+    assert output_path.exists()
+    reloaded = gpd.read_file(output_path)
+    assert len(reloaded) == 2
+    assert set(reloaded["name"]) == {"A", "B"}
+
+
+def test_convert_vector_format_to_kml(tmp_path):
+    from shapely.geometry import Point
+
+    input_path = tmp_path / "input.geojson"
+    output_path = tmp_path / "output.kml"
+
+    gdf = gpd.GeoDataFrame({"name": ["A"]}, geometry=[Point(10, 20)], crs="EPSG:32631")
+    gdf.to_file(input_path, driver="GeoJSON")
+
+    convert_vector_format(str(input_path), str(output_path))
+
+    assert output_path.exists()
+    reloaded = gpd.read_file(str(output_path), driver="KML")
+    assert len(reloaded) == 1
+
+
+def test_convert_vector_format_unsupported_extension(tmp_path):
+    from shapely.geometry import Point
+
+    input_path = tmp_path / "input.geojson"
+    gdf = gpd.GeoDataFrame({"name": ["A"]}, geometry=[Point(0, 0)], crs="EPSG:4326")
+    gdf.to_file(input_path, driver="GeoJSON")
+
+    with pytest.raises(ValueError):
+        convert_vector_format(str(input_path), str(tmp_path / "output.xyz"))
+
+
+def test_load_kmz(tmp_path):
+    import zipfile
+    from shapely.geometry import Point
+
+    kml_path = tmp_path / "doc.kml"
+    gdf = gpd.GeoDataFrame({"name": ["test_point"]}, geometry=[Point(5, 5)], crs="EPSG:4326")
+    gdf.to_file(kml_path, driver="KML")
+
+    kmz_path = tmp_path / "test.kmz"
+    with zipfile.ZipFile(kmz_path, "w") as z:
+        z.write(kml_path, arcname="doc.kml")
+
+    result = load_kmz(str(kmz_path))
+    assert len(result) == 1
+
+
+def test_load_vector_basic(tmp_path):
+    from shapely.geometry import Point
+
+    path = tmp_path / "test.geojson"
+    gdf = gpd.GeoDataFrame({"name": ["A"]}, geometry=[Point(0, 0)], crs="EPSG:4326")
+    gdf.to_file(path, driver="GeoJSON")
+
+    result = load_vector(str(path))
+    assert len(result) == 1
+    assert result.crs.to_epsg() == 4326
+
+
+def test_load_raster_as_array(tmp_path):
+    raster_path = tmp_path / "test.tif"
+    data = np.ones((5, 5), dtype="float32") * 3.0
+    transform = rasterio.transform.from_bounds(0, 0, 5, 5, 5, 5)
+
+    with rasterio.open(
+        raster_path, "w", driver="GTiff",
+        height=5, width=5, count=1, dtype="float32",
+        crs="EPSG:4326", transform=transform
+    ) as dst:
+        dst.write(data, 1)
+
+    arr, meta = load_raster_as_array(str(raster_path))
+    assert arr.shape == (5, 5)
+    assert np.all(arr == 3.0)
+    assert meta["crs"].to_epsg() == 4326
