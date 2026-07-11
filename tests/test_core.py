@@ -5,7 +5,7 @@ import rasterio
 from rasterio.transform import from_bounds
 import pytest
 
-from geofeatures.core import compute_ndvi, extract_zonal_features
+from geofeatures.core import compute_ndvi, extract_zonal_features, compute_evi, compute_gndvi, compute_mndwi, compute_ndmi, compute_bsi, compute_nbr, compute_ndwi, compute_savi, compute_ndbi
 
 
 def test_compute_ndvi_known_values():
@@ -43,3 +43,78 @@ def test_extract_zonal_features_known_constant_raster(tmp_path):
     assert np.isclose(result["mean"].iloc[0], 5.0)
     assert np.isclose(result["min"].iloc[0], 5.0)
     assert np.isclose(result["max"].iloc[0], 5.0)
+
+
+def test_compute_evi_known_values():
+    # NIR=0.6, Red=0.2, Blue=0.1 -> 2.5*(0.6-0.2)/(0.6+6*0.2-7.5*0.1+1) = 2.5*0.4/2.05 = 0.4878
+    nir = np.array([[0.6]], dtype="float32")
+    red = np.array([[0.2]], dtype="float32")
+    blue = np.array([[0.1]], dtype="float32")
+    evi = compute_evi(nir, red, blue)
+    assert np.isclose(evi[0, 0], 0.4878, atol=1e-3)
+
+
+def test_compute_gndvi_known_values():
+    # NIR=0.7, Green=0.3 -> (0.7-0.3)/(0.7+0.3) = 0.4
+    nir = np.array([[0.7]], dtype="float32")
+    green = np.array([[0.3]], dtype="float32")
+    gndvi = compute_gndvi(nir, green)
+    assert np.isclose(gndvi[0, 0], 0.4, atol=1e-3)
+
+
+def test_compute_mndwi_known_values():
+    # Green=0.5, SWIR=0.2 -> (0.5-0.2)/(0.5+0.2) = 0.4286
+    green = np.array([[0.5]], dtype="float32")
+    swir = np.array([[0.2]], dtype="float32")
+    mndwi = compute_mndwi(green, swir)
+    assert np.isclose(mndwi[0, 0], 0.4286, atol=1e-3)
+
+
+def test_compute_ndmi_known_values():
+    # NIR=0.6, SWIR=0.3 -> (0.6-0.3)/(0.6+0.3) = 0.3333
+    nir = np.array([[0.6]], dtype="float32")
+    swir = np.array([[0.3]], dtype="float32")
+    ndmi = compute_ndmi(nir, swir)
+    assert np.isclose(ndmi[0, 0], 0.3333, atol=1e-3)
+
+
+def test_compute_bsi_known_values():
+    # SWIR=0.4, Red=0.3, NIR=0.5, Blue=0.1 -> ((0.4+0.3)-(0.5+0.1))/((0.4+0.3)+(0.5+0.1)) = (0.7-0.6)/(0.7+0.6) = 0.0769
+    swir = np.array([[0.4]], dtype="float32")
+    red = np.array([[0.3]], dtype="float32")
+    nir = np.array([[0.5]], dtype="float32")
+    blue = np.array([[0.1]], dtype="float32")
+    bsi = compute_bsi(swir, red, nir, blue)
+    assert np.isclose(bsi[0, 0], 0.0769, atol=1e-3)
+
+
+def test_compute_nbr_known_values():
+    # NIR=0.7, SWIR2=0.2 -> (0.7-0.2)/(0.7+0.2) = 0.5556
+    nir = np.array([[0.7]], dtype="float32")
+    swir2 = np.array([[0.2]], dtype="float32")
+    nbr = compute_nbr(nir, swir2)
+    assert np.isclose(nbr[0, 0], 0.5556, atol=1e-3)
+
+
+def test_compute_ndwi_known_values():
+    # Green=0.5, NIR=0.1 -> (0.5-0.1)/(0.5+0.1) = 0.6667
+    green = np.array([[0.5]], dtype="float32")
+    nir = np.array([[0.1]], dtype="float32")
+    ndwi = compute_ndwi(green, nir)
+    assert np.isclose(ndwi[0, 0], 0.6667, atol=1e-3)
+
+
+def test_compute_savi_known_values():
+    # NIR=0.8, Red=0.2, L=0.5 -> ((0.8-0.2)/(0.8+0.2+0.5)) * 1.5 = 0.6
+    nir = np.array([[0.8]], dtype="float32")
+    red = np.array([[0.2]], dtype="float32")
+    savi = compute_savi(nir, red, L=0.5)
+    assert np.isclose(savi[0, 0], 0.6, atol=1e-3)
+
+
+def test_compute_ndbi_known_values():
+    # SWIR=0.5, NIR=0.3 -> (0.5-0.3)/(0.5+0.3) = 0.25
+    swir = np.array([[0.5]], dtype="float32")
+    nir = np.array([[0.3]], dtype="float32")
+    ndbi = compute_ndbi(swir, nir)
+    assert np.isclose(ndbi[0, 0], 0.25, atol=1e-3)
