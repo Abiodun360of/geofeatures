@@ -169,3 +169,106 @@ def compute_ndbi(swir_band, nir_band):
     swir = swir_band.astype("float32")
     nir = nir_band.astype("float32")
     return (swir - nir) / (swir + nir + 1e-6)
+
+
+def merge_shapefiles(gdf_list, target_crs=None):
+    """
+    Merge multiple GeoDataFrames into one, reprojecting to a common CRS first.
+
+    Parameters
+    ----------
+    gdf_list : list of geopandas.GeoDataFrame
+        GeoDataFrames to merge. Can have different CRSs.
+    target_crs : str or None
+        CRS to reproject all inputs to before merging. If None, uses the
+        CRS of the first GeoDataFrame in the list.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Combined GeoDataFrame with all input features.
+    """
+    if not gdf_list:
+        raise ValueError("gdf_list cannot be empty")
+
+    if target_crs is None:
+        target_crs = gdf_list[0].crs
+
+    reprojected = [gdf.to_crs(target_crs) for gdf in gdf_list]
+    merged = gpd.pd.concat(reprojected, ignore_index=True)
+    return gpd.GeoDataFrame(merged, crs=target_crs)
+
+
+def dissolve_by_attribute(vector_gdf, attribute, agg_func="first"):
+    """
+    Dissolve (merge) polygons that share the same value in a given attribute column.
+
+    Parameters
+    ----------
+    vector_gdf : geopandas.GeoDataFrame
+        Input polygons.
+    attribute : str
+        Column name to dissolve by (e.g. "state_name").
+    agg_func : str or dict, default "first"
+        Aggregation function for other columns during dissolve.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Dissolved GeoDataFrame, one row per unique attribute value.
+    """
+    if attribute not in vector_gdf.columns:
+        raise ValueError(f"Column '{attribute}' not found in vector_gdf")
+
+    return vector_gdf.dissolve(by=attribute, aggfunc=agg_func).reset_index()
+
+
+def clip_vector(vector_gdf, clip_boundary_gdf):
+    """
+    Clip a GeoDataFrame to the boundary of another GeoDataFrame,
+    automatically handling CRS mismatches.
+
+    Parameters
+    ----------
+    vector_gdf : geopandas.GeoDataFrame
+        The data to be clipped.
+    clip_boundary_gdf : geopandas.GeoDataFrame
+        The boundary to clip to.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Clipped GeoDataFrame, reprojected to match vector_gdf's original CRS.
+    """
+    if vector_gdf.crs != clip_boundary_gdf.crs:
+        clip_boundary_gdf = clip_boundary_gdf.to_crs(vector_gdf.crs)
+
+    return gpd.clip(vector_gdf, clip_boundary_gdf)
+
+
+def clip_raster_by_vector(raster_path, vector_gdf, output_path):
+    """
+    Clip a raster to the boundary of a vector GeoDataFrame, handling
+    CRS mismatches automatically.
+    """
+    import rasterio.mask
+
+    with rasterio.open(raster_path) as src:
+        if vector_gdf.crs != src.crs:
+            vector_gdf = vector_gdf.to_crs(src.crs)
+
+        geometries = vector_gdf.geometry.values
+
+        out_image, out_transform = rasterio.mask.mask(src, geometries, crop=True)
+        out_meta = src.meta.copy()
+
+    out_meta.update({
+        "height": out_image.shape[1],
+        "width": out_image.shape[2],
+        "transform": out_transform
+    })
+
+    with rasterio.open(output_path, "w", **out_meta) as dst:
+        dst.write(out_image)
+
+    return output_path
