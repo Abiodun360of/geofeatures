@@ -6,7 +6,7 @@ import rasterio.transform
 from rasterio.transform import from_bounds
 import pytest
 
-from geofeatures.core import compute_ndvi, extract_zonal_features, compute_evi, compute_gndvi, compute_mndwi, compute_ndmi, compute_bsi, compute_nbr, compute_ndwi, compute_savi, compute_ndbi, merge_shapefiles, dissolve_by_attribute, clip_vector, clip_raster_by_vector, convert_vector_format, load_kmz, load_vector, load_raster_as_array
+from geofeatures.core import compute_ndvi, extract_zonal_features, compute_evi, compute_gndvi, compute_mndwi, compute_ndmi, compute_bsi, compute_nbr, compute_ndwi, compute_savi, compute_ndbi, merge_shapefiles, dissolve_by_attribute, clip_vector, clip_raster_by_vector, convert_vector_format, load_kmz, load_vector, load_raster_as_array, compute_slope, compute_aspect, compute_hillshade, distance_to_nearest, reproject_raster, resample_raster
 
 
 def test_compute_ndvi_known_values():
@@ -344,3 +344,151 @@ def test_load_raster_as_array(tmp_path):
     assert arr.shape == (5, 5)
     assert np.all(arr == 3.0)
     assert meta["crs"].to_epsg() == 4326
+
+
+def test_compute_slope_flat_dem():
+    # Completely flat DEM -> slope should be ~0 everywhere
+    dem = np.ones((10, 10), dtype="float32") * 100.0
+    slope = compute_slope(dem, pixel_size=10)
+    assert np.allclose(slope, 0, atol=1e-6)
+
+
+def test_compute_slope_known_tilt():
+    # DEM tilts 1 unit elevation per 1 unit distance in x -> 45 degree slope
+    # Create a ramp: each column increases elevation by `pixel_size`
+    pixel_size = 10
+    x = np.arange(10) * pixel_size
+    dem = np.tile(x, (10, 1)).astype("float64")  # elevation rises by pixel_size per pixel in x
+
+    slope = compute_slope(dem, pixel_size=pixel_size, units="degrees")
+    # Interior points (not edges) should be close to 45 degrees
+    interior_slope = slope[3:7, 3:7]
+    assert np.allclose(interior_slope, 45.0, atol=1.0)
+
+
+def test_compute_aspect_flat_returns_negative_one():
+    dem = np.ones((10, 10), dtype="float32") * 50.0
+    aspect = compute_aspect(dem, pixel_size=10)
+    assert np.all(aspect == -1)
+
+
+def test_compute_aspect_range():
+    np.random.seed(42)
+    dem = np.random.uniform(0, 100, (10, 10)).astype("float32")
+    aspect = compute_aspect(dem, pixel_size=10)
+    valid = aspect[aspect != -1]
+    assert np.all(valid >= 0) and np.all(valid <= 360)
+
+
+def test_compute_hillshade_range():
+    np.random.seed(42)
+    dem = np.random.uniform(0, 100, (10, 10)).astype("float32")
+    hillshade = compute_hillshade(dem, pixel_size=10)
+    assert np.all(hillshade >= 0) and np.all(hillshade <= 255)
+
+
+def test_compute_hillshade_flat_dem_uniform():
+    # Flat DEM should produce uniform hillshade everywhere
+    dem = np.ones((10, 10), dtype="float32") * 50.0
+    hillshade = compute_hillshade(dem, pixel_size=10)
+    assert np.allclose(hillshade, hillshade[0, 0], atol=1e-6)
+
+
+def test_distance_to_nearest_known_values():
+    from shapely.geometry import Point
+
+    # Source point at origin
+    source = gpd.GeoDataFrame({"id": [1]}, geometry=[Point(0, 0)], crs="EPSG:32631")
+    # Two targets: one at distance 5, one at distance 10
+    targets = gpd.GeoDataFrame(
+        {"id": [1, 2]},
+        geometry=[Point(5, 0), Point(10, 0)],
+        crs="EPSG:32631"
+    )
+
+    result = distance_to_nearest(source, targets)
+
+    assert np.isclose(result["dist_to_nearest"].iloc[0], 5.0, atol=1e-6)
+
+
+def test_distance_to_nearest_different_crs():
+    from shapely.geometry import Point
+
+    source = gpd.GeoDataFrame({"id": [1]}, geometry=[Point(0, 0)], crs="EPSG:32631")
+    targets = gpd.GeoDataFrame({"id": [1]}, geometry=[Point(3, 4)], crs="EPSG:32631").to_crs("EPSG:4326")
+
+    result = distance_to_nearest(source, targets)
+
+    # Distance should still compute correctly (3-4-5 triangle -> 5.0) after CRS reconciliation
+    assert np.isclose(result["dist_to_nearest"].iloc[0], 5.0, atol=1e-3)
+
+
+def test_distance_to_nearest_custom_column_name():
+    from shapely.geometry import Point
+
+    source = gpd.GeoDataFrame({"id": [1]}, geometry=[Point(0, 0)], crs="EPSG:32631")
+    targets = gpd.GeoDataFrame({"id": [1]}, geometry=[Point(7, 0)], crs="EPSG:32631")
+
+    result = distance_to_nearest(source, targets, distance_col_name="dist_to_road")
+
+    assert "dist_to_road" in result.columns
+    assert np.isclose(result["dist_to_road"].iloc[0], 7.0, atol=1e-6)
+
+
+def test_reproject_raster(tmp_path):
+    input_path = tmp_path / "input.tif"
+    output_path = tmp_path / "reprojected.tif"
+
+    data = np.ones((10, 10), dtype="float32")
+    transform = rasterio.transform.from_bounds(0, 0, 10, 10, 10, 10)
+
+    with rasterio.open(
+        input_path, "w", driver="GTiff",
+        height=10, width=10, count=1, dtype="float32",
+        crs="EPSG:32631", transform=transform
+    ) as dst:
+        dst.write(data, 1)
+
+    reproject_raster(str(input_path), str(output_path), target_crs="EPSG:4326")
+
+    with rasterio.open(output_path) as result:
+        assert result.crs.to_epsg() == 4326
+
+
+def test_reproject_raster_invalid_method(tmp_path):
+    input_path = tmp_path / "input.tif"
+    data = np.ones((5, 5), dtype="float32")
+    transform = rasterio.transform.from_bounds(0, 0, 5, 5, 5, 5)
+
+    with rasterio.open(
+        input_path, "w", driver="GTiff",
+        height=5, width=5, count=1, dtype="float32",
+        crs="EPSG:4326", transform=transform
+    ) as dst:
+        dst.write(data, 1)
+
+    with pytest.raises(ValueError):
+        reproject_raster(str(input_path), str(tmp_path / "out.tif"), target_crs="EPSG:32631", resampling_method="bogus")
+
+
+def test_resample_raster_halves_resolution(tmp_path):
+    input_path = tmp_path / "input.tif"
+    output_path = tmp_path / "resampled.tif"
+
+    # 10x10 raster at 1-unit pixel size covering (0,0)-(10,10)
+    data = np.ones((10, 10), dtype="float32")
+    transform = rasterio.transform.from_bounds(0, 0, 10, 10, 10, 10)
+
+    with rasterio.open(
+        input_path, "w", driver="GTiff",
+        height=10, width=10, count=1, dtype="float32",
+        crs="EPSG:32631", transform=transform
+    ) as dst:
+        dst.write(data, 1)
+
+    # Resample to 2-unit pixel size -> should roughly halve width/height
+    resample_raster(str(input_path), str(output_path), target_resolution=2.0)
+
+    with rasterio.open(output_path) as result:
+        assert result.width == 5
+        assert result.height == 5

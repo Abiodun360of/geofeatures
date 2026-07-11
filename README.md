@@ -58,3 +58,18 @@ MIT
 - `load_kmz(path)` — load a KMZ (zipped KML) file
 - `load_vector(path, target_crs, fix_invalid)` — load with automatic geometry repair
 - `load_raster_as_array(path)` — load raster as numpy array + metadata
+
+## Terrain analysis
+
+- `compute_slope(dem_array, pixel_size, units)` — slope in degrees/percent/radians
+- `compute_aspect(dem_array, pixel_size)` — compass direction of slope (0-360°)
+- `compute_hillshade(dem_array, pixel_size, azimuth, altitude)` — simulated illumination
+
+## Spatial analysis
+
+- `distance_to_nearest(source_gdf, target_gdf, distance_col_name)` — distance from each feature to nearest target feature
+
+## Raster transformation
+
+- `reproject_raster(input_path, output_path, target_crs, resampling_method)` — reproject to a new CRS
+- `resample_raster(input_path, output_path, target_resolution)` — change pixel resolution

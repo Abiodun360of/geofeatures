@@ -359,3 +359,230 @@ def load_raster_as_array(path):
         data = src.read(1)
         meta = {"crs": src.crs, "transform": src.transform}
     return data, meta
+
+
+def compute_slope(dem_array, pixel_size, units="degrees"):
+    """
+    Compute slope from a DEM array.
+
+    Parameters
+    ----------
+    dem_array : numpy.ndarray
+        2D array of elevation values.
+    pixel_size : float
+        Ground resolution of one pixel (e.g. 30 for 30m DEM).
+    units : str, default "degrees"
+        "degrees" or "percent" or "radians".
+
+    Returns
+    -------
+    numpy.ndarray
+        Slope values, same shape as dem_array (edges will have reduced accuracy).
+    """
+    dem = dem_array.astype("float64")
+    dy, dx = np.gradient(dem, pixel_size)
+    slope_rad = np.arctan(np.sqrt(dx**2 + dy**2))
+
+    if units == "radians":
+        return slope_rad
+    elif units == "degrees":
+        return np.degrees(slope_rad)
+    elif units == "percent":
+        return np.tan(slope_rad) * 100
+    else:
+        raise ValueError("units must be 'degrees', 'radians', or 'percent'")
+
+
+def compute_aspect(dem_array, pixel_size):
+    """
+    Compute aspect (compass direction of slope) from a DEM array.
+
+    Parameters
+    ----------
+    dem_array : numpy.ndarray
+        2D array of elevation values.
+    pixel_size : float
+        Ground resolution of one pixel.
+
+    Returns
+    -------
+    numpy.ndarray
+        Aspect in degrees (0-360, where 0/360 = North, 90 = East, etc.)
+        Flat areas (zero gradient) return -1.
+    """
+    dem = dem_array.astype("float64")
+    dy, dx = np.gradient(dem, pixel_size)
+
+    aspect_rad = np.arctan2(dy, -dx)
+    aspect_deg = np.degrees(aspect_rad)
+    aspect_deg = 90.0 - aspect_deg
+    aspect_deg = np.where(aspect_deg < 0, aspect_deg + 360, aspect_deg)
+
+    flat_mask = (dx == 0) & (dy == 0)
+    aspect_deg = np.where(flat_mask, -1, aspect_deg)
+
+    return aspect_deg
+
+
+def compute_hillshade(dem_array, pixel_size, azimuth=315, altitude=45):
+    """
+    Compute hillshade (simulated illumination) from a DEM array.
+
+    Parameters
+    ----------
+    dem_array : numpy.ndarray
+        2D array of elevation values.
+    pixel_size : float
+        Ground resolution of one pixel.
+    azimuth : float, default 315
+        Sun direction in degrees (0-360, 315 = NW, standard default).
+    altitude : float, default 45
+        Sun angle above horizon in degrees.
+
+    Returns
+    -------
+    numpy.ndarray
+        Hillshade values 0-255 (8-bit shading), same shape as dem_array.
+    """
+    dem = dem_array.astype("float64")
+    dy, dx = np.gradient(dem, pixel_size)
+
+    slope_rad = np.arctan(np.sqrt(dx**2 + dy**2))
+    aspect_rad = np.arctan2(dy, -dx)
+
+    azimuth_rad = np.radians(360.0 - azimuth + 90)
+    altitude_rad = np.radians(altitude)
+
+    shaded = (
+        np.sin(altitude_rad) * np.cos(slope_rad)
+        + np.cos(altitude_rad) * np.sin(slope_rad) * np.cos(azimuth_rad - aspect_rad)
+    )
+
+    hillshade = 255 * (shaded + 1) / 2
+    return np.clip(hillshade, 0, 255)
+
+
+def distance_to_nearest(source_gdf, target_gdf, distance_col_name="dist_to_nearest"):
+    """
+    Compute the distance from each geometry in source_gdf to its nearest
+    geometry in target_gdf.
+
+    Parameters
+    ----------
+    source_gdf : geopandas.GeoDataFrame
+        Geometries to measure distance FROM (e.g. farm parcels).
+    target_gdf : geopandas.GeoDataFrame
+        Geometries to measure distance TO (e.g. roads, rivers).
+    distance_col_name : str, default "dist_to_nearest"
+        Name of the new column to add with distance values.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        source_gdf with an added distance column. Units match the CRS
+        (e.g. meters if projected CRS, degrees if geographic CRS —
+        caller should ensure both inputs use a projected CRS for
+        meaningful distances).
+    """
+    if source_gdf.crs != target_gdf.crs:
+        target_gdf = target_gdf.to_crs(source_gdf.crs)
+
+    result = source_gdf.copy()
+    distances = []
+
+    for geom in source_gdf.geometry:
+        dists_to_all = target_gdf.geometry.distance(geom)
+        distances.append(dists_to_all.min())
+
+    result[distance_col_name] = distances
+    return result
+
+
+def reproject_raster(input_path, output_path, target_crs, resampling_method="nearest"):
+    """
+    Reproject a raster to a new CRS.
+
+    Parameters
+    ----------
+    input_path : str
+        Path to the input raster.
+    output_path : str
+        Path to write the reprojected raster.
+    target_crs : str
+        Target CRS (e.g. "EPSG:4326").
+    resampling_method : str, default "nearest"
+        One of: "nearest", "bilinear", "cubic".
+
+    Returns
+    -------
+    str
+        The output_path, for convenience chaining.
+    """
+    from rasterio.warp import calculate_default_transform, reproject, Resampling
+
+    resampling_map = {
+        "nearest": Resampling.nearest,
+        "bilinear": Resampling.bilinear,
+        "cubic": Resampling.cubic,
+    }
+    if resampling_method not in resampling_map:
+        raise ValueError(f"resampling_method must be one of {list(resampling_map.keys())}")
+
+    with rasterio.open(input_path) as src:
+        transform, width, height = calculate_default_transform(
+            src.crs, target_crs, src.width, src.height, *src.bounds
+        )
+        kwargs = src.meta.copy()
+        kwargs.update({
+            "crs": target_crs,
+            "transform": transform,
+            "width": width,
+            "height": height
+        })
+
+        with rasterio.open(output_path, "w", **kwargs) as dst:
+            for i in range(1, src.count + 1):
+                reproject(
+                    source=rasterio.band(src, i),
+                    destination=rasterio.band(dst, i),
+                    src_transform=src.transform,
+                    src_crs=src.crs,
+                    dst_transform=transform,
+                    dst_crs=target_crs,
+                    resampling=resampling_map[resampling_method]
+                )
+
+    return output_path
+
+
+def resample_raster(input_path, output_path, target_resolution):
+    """
+    Resample a raster to a new pixel resolution (same CRS).
+    """
+    from rasterio.enums import Resampling as ResamplingEnum
+
+    with rasterio.open(input_path) as src:
+        scale_factor = src.res[0] / target_resolution
+        new_width = int(src.width * scale_factor)
+        new_height = int(src.height * scale_factor)
+
+        data = src.read(
+            out_shape=(src.count, new_height, new_width),
+            resampling=ResamplingEnum.bilinear
+        )
+
+        new_transform = src.transform * src.transform.scale(
+            (src.width / new_width), (src.height / new_height)
+        )
+
+        kwargs = src.meta.copy()
+        kwargs.update({
+            "height": new_height,
+            "width": new_width,
+            "transform": new_transform
+        })
+
+        with rasterio.open(output_path, "w", **kwargs) as dst:
+            dst.write(data)
+
+    return output_path
