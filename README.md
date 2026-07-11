@@ -1,33 +1,11 @@
 # GeoFeatures
 
-Lightweight Python library for extracting zonal statistics and spectral indices from satellite imagery for remote sensing ML pipelines.
-
-## Why
-
-Computing per-polygon raster statistics and spectral indices (e.g. mean NDVI per farm parcel) is a repetitive step in almost every remote sensing / geospatial ML workflow. GeoFeatures wraps this into a clean, tested API.
+Python library for spectral index computation, zonal statistics, and vector/raster operations for remote sensing ML pipelines.
 
 ## Install
 
 ```bash
 pip install geofeatures
-```
-
-## Quick example
-
-```python
-from geofeatures.core import ndvi_zonal_stats
-import geopandas as gpd
-
-polygons = gpd.read_file("parcels.geojson")
-
-result = ndvi_zonal_stats(
-    nir_band=nir,
-    red_band=red,
-    vector_gdf=polygons,
-    raster_template_path="ndvi.tif"
-)
-
-print(result[["name", "mean", "std"]])
 ```
 
 ## Spectral indices
@@ -47,12 +25,22 @@ print(result[["name", "mean", "std"]])
 
 ## Zonal statistics
 
-- `extract_zonal_features(raster_path, vector_gdf, stats)` — statistics per polygon
-- `ndvi_zonal_stats(...)` — convenience wrapper combining NDVI + zonal stats
+- `extract_zonal_features(raster_path, vector_gdf, stats)`
+- `ndvi_zonal_stats(...)` — convenience wrapper (NDVI + zonal stats in one call)
+
+## Vector operations
+
+- `merge_shapefiles(gdf_list, target_crs=None)` — merge GeoDataFrames, handling CRS mismatches
+- `dissolve_by_attribute(vector_gdf, attribute, agg_func="first")` — dissolve polygons by shared attribute
+- `clip_vector(vector_gdf, clip_boundary_gdf)` — clip vector to a boundary
+
+## Raster-vector operations
+
+- `clip_raster_by_vector(raster_path, vector_gdf, output_path)` — clip a raster to a vector boundary
 
 ## Validated
 
-Tested end-to-end on real Sentinel-2 L2A imagery (via Microsoft Planetary Computer) over Ogun State, Nigeria. 12 unit tests covering all indices with hand-verified formula outputs.
+Tested end-to-end on real Sentinel-2 L2A imagery over Ogun State, Nigeria. 18 unit tests with hand-verified formula outputs and edge-case coverage (CRS mismatches, missing columns, spatial overlap logic).
 
 ## License
 
